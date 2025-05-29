@@ -482,7 +482,7 @@ def define_model(args):
     if args.model_path and os.path.exists(args.model_path):
         print(f"Loading model weights from {args.model_path}")
         try:
-            pretrained_model_chkp = torch.load(args.model_path, map_location='cpu')
+            pretrained_model_chkp = torch.load(args.model_path, map_location='cpu',weights_only=False)
             actual_state_dict = None
             if param_key_g in pretrained_model_chkp:
                 actual_state_dict = pretrained_model_chkp[param_key_g]
