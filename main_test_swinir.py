@@ -8,6 +8,7 @@ from collections import OrderedDict
 import os
 import torch
 import requests
+import matplotlib.pyplot as plt
 
 # --- ADDED IMPORTS for Training ---
 import torch.nn as nn
@@ -107,6 +108,7 @@ def main():
     parser.add_argument('--freeze_rstb_upto', type=int, default=-1, help='Freeze RSTB layers (model.layers) up to this index (e.g., 0, 1). -1 means no RSTB freezing.')
     parser.add_argument('--freeze_reconstruction', action='store_true', help='Freeze reconstruction layers (upsampler, conv_last, etc.)')
     # --- END ADDED ARGS ---
+    parser.add_argument('--display_n_triplets', type=int, default=0, help='Number of LR-SR-GT image triplets to display during testing (0 for none). Requires GT folder.')
 
     args = parser.parse_args()
 
@@ -337,88 +339,157 @@ def run_testing(args, model, device):
     test_results['psnrb'] = []
     test_results['psnrb_y'] = []
     psnr, ssim, psnr_y, ssim_y, psnrb, psnrb_y = 0, 0, 0, 0, 0, 0
+    displayed_triplets_count = 0
 
     for idx, path in enumerate(sorted(glob.glob(os.path.join(folder, '*')))):
-        imgname, img_lq, img_gt = get_image_pair(args, path)
-        img_lq = np.transpose(img_lq if img_lq.shape[2] == 1 else img_lq[:, :, [2, 1, 0]], (2, 0, 1))
-        img_lq = torch.from_numpy(img_lq).float().unsqueeze(0).to(device)
+        # img_lq_orig and img_gt_orig are HWC, float32, [0,1]
+        # BGR if color, (H,W,1) if grayscale
+        imgname, img_lq_orig, img_gt_orig = get_image_pair(args, path)
+
+        # Prepare img_lq for model input (CHW, RGB or Gray)
+        if img_lq_orig.shape[2] == 1: # Grayscale (H,W,1)
+            img_lq_model_input_np = np.transpose(img_lq_orig, (2, 0, 1)) # (1,H,W)
+        else: # Color (H,W,3) BGR
+            img_lq_model_input_np = np.transpose(img_lq_orig[:, :, [2, 1, 0]], (2, 0, 1)) # BGR to RGB, then HWC to CHW (3,H,W)
+        img_lq_for_model = torch.from_numpy(img_lq_model_input_np).float().unsqueeze(0).to(device)
 
         with torch.no_grad():
             # pad input image to be a multiple of window_size
-            _, _, h_old, w_old = img_lq.size()
+            _, _, h_old, w_old = img_lq_for_model.size() # Dimensions of LR image fed to model
             h_pad = (h_old // window_size + 1) * window_size - h_old if h_old % window_size != 0 else 0
             w_pad = (w_old // window_size + 1) * window_size - w_old if w_old % window_size != 0 else 0
 
-            img_lq_padded = img_lq
-            if h_pad != 0 or w_pad != 0: # Only pad if necessary
-                img_lq_padded = torch.cat([img_lq, torch.flip(img_lq, [2])], 2)[:, :, :h_old + h_pad, :]
+            img_lq_padded = img_lq_for_model
+            if h_pad != 0 or w_pad != 0: 
+                img_lq_padded = torch.cat([img_lq_for_model, torch.flip(img_lq_for_model, [2])], 2)[:, :, :h_old + h_pad, :]
                 img_lq_padded = torch.cat([img_lq_padded, torch.flip(img_lq_padded, [3])], 3)[:, :, :, :w_old + w_pad]
             
-            output = test(img_lq_padded, model, args, window_size)
-            output = output[..., :h_old * args.scale, :w_old * args.scale]
+            output_tensor = test(img_lq_padded, model, args, window_size) # Output is CHW, RGB, float, [0,1]
+            output_tensor = output_tensor[..., :h_old * args.scale, :w_old * args.scale]
 
-        output_np = output.data.squeeze().float().cpu().clamp_(0, 1).numpy()
-        if output_np.ndim == 3:
-            output_np = np.transpose(output_np[[2, 1, 0], :, :], (1, 2, 0)) # BGR for cv2
-        output_np = (output_np * 255.0).round().astype(np.uint8)
-        cv2.imwrite(f'{save_dir}/{imgname}_SwinIR.png', output_np)
+        # --- Prepare SR image for saving (BGR) and display (RGB) ---
+        sr_tensor_chw_rgb_norm = output_tensor.data.squeeze().float().cpu().clamp_(0, 1) # CHW, RGB, [0,1]
 
-        if img_gt is not None:
-            img_gt_eval = (img_gt * 255.0).round().astype(np.uint8)
-            # Ensure img_gt is cropped like output if args.scale was applied
+        # For saving with cv2 (expects BGR uint8)
+        if sr_tensor_chw_rgb_norm.ndim == 3: # Color CHW RGB
+            sr_hwc_bgr_for_save_np = np.transpose(sr_tensor_chw_rgb_norm.numpy()[[2,1,0], :, :], (1,2,0)) # HWC BGR
+        else: # Grayscale HW
+            sr_hwc_bgr_for_save_np = sr_tensor_chw_rgb_norm.numpy() # HW
+            if sr_hwc_bgr_for_save_np.ndim == 2: # Ensure 3D for consistency if needed by cv2 or metrics
+                 sr_hwc_bgr_for_save_np = np.expand_dims(sr_hwc_bgr_for_save_np, axis=2) # HW1
+        sr_image_to_save = (sr_hwc_bgr_for_save_np * 255.0).round().astype(np.uint8)
+        cv2.imwrite(f'{save_dir}/{imgname}_SwinIR.png', sr_image_to_save)
+
+        # For display & some metrics if they prefer RGB (matplotlib prefers RGB)
+        if sr_tensor_chw_rgb_norm.ndim == 3: # Color CHW RGB
+            sr_hwc_rgb_for_display_np = np.transpose(sr_tensor_chw_rgb_norm.numpy(), (1,2,0)) # HWC RGB
+        else: # Grayscale HW
+            sr_hwc_rgb_for_display_np = sr_tensor_chw_rgb_norm.numpy() # HW
+        sr_image_for_display = (sr_hwc_rgb_for_display_np * 255.0).round().astype(np.uint8)
+        # sr_image_for_display is now HWC, RGB (if color) or HW (if gray), uint8
+
+
+        if img_gt_orig is not None:
+            # img_gt_orig is HWC, float32, [0,1], BGR if color
+            img_gt_eval = (img_gt_orig * 255.0).round().astype(np.uint8) # HWC, BGR (if color), uint8
+            # Crop GT to match SR image dimensions
             img_gt_eval = img_gt_eval[:h_old * args.scale, :w_old * args.scale, ...] 
-            img_gt_eval = np.squeeze(img_gt_eval)
-
-            # BGR to RGB for consistent PSNR/SSIM calculation if needed, or ensure util handles it
-            # For PSNR/SSIM, cv2 imwrite saves BGR, util might expect RGB.
-            # SwinIR output is RGB, then converted to BGR for saving.
-            # For eval, convert output_np (BGR) back to RGB if util expects RGB, or ensure util handles BGR.
-            # Original code implies util.calculate_psnr/ssim works with the BGR `output_np` and RGB `img_gt_eval` (if color)
-            # Let's assume util.calculate_psnr/ssim handles input format consistently or img_gt_eval is already in compatible format (e.g. RGB if output_np is effectively RGB before BGR conversion for saving)
-            # The test() function output is RGB. np.transpose(output_np[[2,1,0]... converts it to BGR.
-            # So, if img_gt_eval is RGB, output_np should be converted back or util should handle BGR.
-            # Given the original structure, let's assume img_gt_eval is also BGR for util if output_np is BGR.
-            # However, `get_image_pair` reads GT as BGR then float/255. For color tasks, it's kept as BGR implicitly (cv2.imread loads BGR).
-            # Let's ensure output_np is RGB for metric calculation if img_gt (from get_image_pair) is effectively RGB (after float conversion).
-            # The `get_image_pair` provides `img_gt` in BGR order (for color) or single channel.
-            # `output_np` is BGR. So metrics should be fine.
+            # For grayscale, util.calculate_psnr might expect (H,W) or (H,W,1). Squeeze if it's (H,W,1).
+            # If img_gt_eval was (H,W,1) and sr_image_to_save was (H,W,1), squeeze both or neither.
+            # Let's assume util functions handle (H,W,C) and (H,W) appropriately or img_gt_eval is fine as is.
+            # sr_image_to_save is (H,W,C) (BGR or Gray_1CH). img_gt_eval is (H,W,C) (BGR or Gray_1CH)
             
-            psnr = util.calculate_psnr(output_np, img_gt_eval, crop_border=border)
-            ssim = util.calculate_ssim(output_np, img_gt_eval, crop_border=border)
-            test_results['psnr'].append(psnr)
-            test_results['ssim'].append(ssim)
-            if img_gt_eval.ndim == 3: # Color image
-                psnr_y = util.calculate_psnr(output_np, img_gt_eval, crop_border=border, test_y_channel=True)
-                ssim_y = util.calculate_ssim(output_np, img_gt_eval, crop_border=border, test_y_channel=True)
+            current_psnr = util.calculate_psnr(sr_image_to_save, img_gt_eval, crop_border=border)
+            current_ssim = util.calculate_ssim(sr_image_to_save, img_gt_eval, crop_border=border)
+            test_results['psnr'].append(current_psnr)
+            test_results['ssim'].append(current_ssim)
+            
+            psnr_y, ssim_y = 0, 0 # Initialize
+            if img_gt_eval.ndim == 3 and img_gt_eval.shape[2] == 3: # Color image
+                psnr_y = util.calculate_psnr(sr_image_to_save, img_gt_eval, crop_border=border, test_y_channel=True)
+                ssim_y = util.calculate_ssim(sr_image_to_save, img_gt_eval, crop_border=border, test_y_channel=True)
                 test_results['psnr_y'].append(psnr_y)
                 test_results['ssim_y'].append(ssim_y)
+            
+            psnrb, psnrb_y = 0, 0 # Initialize
             if args.task in ['jpeg_car', 'color_jpeg_car']:
-                psnrb = util.calculate_psnrb(output_np, img_gt_eval, crop_border=border, test_y_channel=False) # PSNR-B
+                psnrb = util.calculate_psnrb(sr_image_to_save, img_gt_eval, crop_border=border, test_y_channel=False)
                 test_results['psnrb'].append(psnrb)
-                if args.task in ['color_jpeg_car']: 
-                    psnrb_y = util.calculate_psnrb(output_np, img_gt_eval, crop_border=border, test_y_channel=True) # PSNR-B Y
+                if args.task in ['color_jpeg_car'] and img_gt_eval.ndim == 3 and img_gt_eval.shape[2] == 3: 
+                    psnrb_y = util.calculate_psnrb(sr_image_to_save, img_gt_eval, crop_border=border, test_y_channel=True)
                     test_results['psnrb_y'].append(psnrb_y)
-            print('Testing {:d} {:20s} - PSNR: {:.2f} dB; SSIM: {:.4f}; PSNRB: {:.2f} dB;'
+            
+            print('Testing {:d} {:20s} - PSNR: {:.2f} dB; SSIM: {:.4f}; PSNRB: {:.2f} dB; '
                   'PSNR_Y: {:.2f} dB; SSIM_Y: {:.4f}; PSNRB_Y: {:.2f} dB.'.
-                  format(idx, imgname, psnr, ssim, psnrb, psnr_y, ssim_y, psnrb_y))
-        else:
-            print('Testing {:d} {:20s}'.format(idx, imgname))
+                  format(idx, imgname, current_psnr, current_ssim, psnrb, psnr_y, ssim_y, psnrb_y))
 
-    if img_gt is not None and test_results['psnr']:
+            # --- START ADDED VISUALIZATION CODE ---
+            if args.display_n_triplets > 0 and displayed_triplets_count < args.display_n_triplets:
+                print(f"Displaying triplet {displayed_triplets_count + 1}/{args.display_n_triplets} for {imgname}...")
+
+                # 1. LR image for display (img_lq_orig: HWC, float32, 0-1, BGR if color)
+                lr_display_prep = (img_lq_orig * 255.0).round().astype(np.uint8)
+                is_color_image = (img_lq_orig.shape[2] == 3)
+                
+                if is_color_image:
+                    lr_display = cv2.cvtColor(lr_display_prep, cv2.COLOR_BGR2RGB)
+                else: # Grayscale
+                    lr_display = np.squeeze(lr_display_prep) # (H,W,1) -> (H,W)
+
+                # 2. SR image for display (sr_image_for_display: HWC uint8 RGB, or HW uint8 Gray)
+                # Already prepared as sr_image_for_display
+
+                # 3. GT image for display (img_gt_orig: HWC, float32, 0-1, BGR if color)
+                gt_display_prep = (img_gt_orig * 255.0).round().astype(np.uint8)
+                gt_display_prep = gt_display_prep[:h_old * args.scale, :w_old * args.scale, ...] # Crop
+                if is_color_image:
+                    gt_display = cv2.cvtColor(gt_display_prep, cv2.COLOR_BGR2RGB)
+                else: # Grayscale
+                    gt_display = np.squeeze(gt_display_prep)
+
+                fig, axes = plt.subplots(1, 3, figsize=(18, 7)) # Increased height for suptitle
+                
+                cmap_val = None if is_color_image else 'gray'
+
+                axes[0].imshow(lr_display, cmap=cmap_val)
+                axes[0].set_title(f'Low-Res (Input)\n{lr_display.shape[:2]}')
+                axes[0].axis('off')
+
+                axes[1].imshow(sr_image_for_display, cmap=cmap_val)
+                axes[1].set_title(f'Super-Res (SwinIR)\n{sr_image_for_display.shape[:2]}\nPSNR: {current_psnr:.2f} dB')
+                axes[1].axis('off')
+
+                axes[2].imshow(gt_display, cmap=cmap_val)
+                axes[2].set_title(f'High-Res (Ground Truth)\n{gt_display.shape[:2]}')
+                axes[2].axis('off')
+
+                plt.suptitle(f'Image: {imgname} (Triplet {displayed_triplets_count + 1})', fontsize=16)
+                plt.tight_layout(rect=[0, 0, 1, 0.95]) # Adjust layout to make space for suptitle
+                plt.show()
+                
+                displayed_triplets_count += 1
+            # --- END ADDED VISUALIZATION CODE ---
+
+        else: # img_gt_orig is None
+            print('Testing {:d} {:20s} (No GT for metrics/display)'.format(idx, imgname))
+
+    # ... (rest of the run_testing function for average metrics)
+    if img_gt_orig is not None and test_results['psnr']: # Check if any GT was processed
         ave_psnr = sum(test_results['psnr']) / len(test_results['psnr'])
         ave_ssim = sum(test_results['ssim']) / len(test_results['ssim'])
-        print(f'\n{save_dir} \n-- Average PSNR/SSIM(RGB): {ave_psnr:.2f} dB; {ave_ssim:.4f}')
-        if test_results['psnr_y']:
+        print(f'\n{save_dir} \n-- Average PSNR/SSIM(RGB/Gray): {ave_psnr:.2f} dB; {ave_ssim:.4f}')
+        if test_results['psnr_y']: # If any color images were processed
             ave_psnr_y = sum(test_results['psnr_y']) / len(test_results['psnr_y'])
             ave_ssim_y = sum(test_results['ssim_y']) / len(test_results['ssim_y'])
             print(f'-- Average PSNR_Y/SSIM_Y: {ave_psnr_y:.2f} dB; {ave_ssim_y:.4f}')
         if test_results['psnrb'] and args.task in ['jpeg_car', 'color_jpeg_car']:
             ave_psnrb = sum(test_results['psnrb']) / len(test_results['psnrb'])
             print(f'-- Average PSNRB: {ave_psnrb:.2f} dB')
-            if test_results['psnrb_y'] and args.task in ['color_jpeg_car']:
+            if test_results['psnrb_y'] and args.task in ['color_jpeg_car'] and test_results['psnr_y']: # Check psnr_y for color_jpeg_car
                 ave_psnrb_y = sum(test_results['psnrb_y']) / len(test_results['psnrb_y'])
                 print(f'-- Average PSNRB_Y: {ave_psnrb_y:.2f} dB')
     print("Testing finished.")
+
 
 
 def define_model(args):
