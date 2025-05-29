@@ -465,7 +465,11 @@ def run_testing(args, model, device):
 
                 plt.suptitle(f'Image: {imgname} (Triplet {displayed_triplets_count + 1})', fontsize=16)
                 plt.tight_layout(rect=[0, 0, 1, 0.95]) # Adjust layout to make space for suptitle
-                plt.show()
+                # plt.show()
+                output_plot_path = os.path.join(save_dir, f"{imgname}_triplet_visualization.png")
+                plt.savefig(output_plot_path)
+                print(f"Saved triplet visualization to: {output_plot_path}")
+                plt.close(fig)
                 
                 displayed_triplets_count += 1
             # --- END ADDED VISUALIZATION CODE ---
