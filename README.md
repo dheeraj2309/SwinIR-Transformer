@@ -88,19 +88,19 @@ Here's an example command for fine-tuning, particularly suited for notebook envi
     --freeze_rstb_upto 1
 ```
 Key Training Arguments:
---mode train: Sets the script to training mode.
---task classical_sr: Specifies the super-resolution task.
---scale 4: Sets the desired upscaling factor.
---model_path: Path to the pre-trained model weights to start fine-tuning from.
---folder_lq_train, --folder_gt_train: Paths to your training LR and HR images.
---folder_lq_val, --folder_gt_val: Paths to your validation LR and HR images (optional but recommended).
---epochs: Number of training epochs.
---batch_size: Training batch size.
---lr: Learning rate.
---save_dir_train: Directory to save the fine-tuned model checkpoints.
---freeze_rstb_upto 1: Example of layer freezing. Freezes RSTB layers 0 and 1.
-Other freezing options: --freeze_shallow, --freeze_reconstruction.
-Modify paths and hyperparameters as needed for your setup and dataset.
+--mode train: Sets the script to training mode.  
+--task classical_sr: Specifies the super-resolution task.  
+--scale 4: Sets the desired upscaling factor.  
+--model_path: Path to the pre-trained model weights to start fine-tuning from.  
+--folder_lq_train, --folder_gt_train: Paths to your training LR and HR images.  
+--folder_lq_val, --folder_gt_val: Paths to your validation LR and HR images (optional but recommended).  
+--epochs: Number of training epochs.  
+--batch_size: Training batch size.  
+--lr: Learning rate.  
+--save_dir_train: Directory to save the fine-tuned model checkpoints.  
+--freeze_rstb_upto 1: Example of layer freezing. Freezes RSTB layers 0 and 1.  
+Other freezing options: --freeze_shallow, --freeze_reconstruction.  
+Modify paths and hyperparameters as needed for your setup and dataset.  
 ## Testing
 After training, or to test a pre-trained/fine-tuned model, use the test mode. This example tests a fine-tuned model and displays the first 20 LR-SR-HR image triplets.
 ```bash
