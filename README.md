@@ -87,7 +87,7 @@ Here's an example command for fine-tuning, particularly suited for notebook envi
     --save_dir_train /kaggle/working/fine_tuned_models \
     --freeze_rstb_upto 1
 ```
-Key Training Arguments:
+Key Training Arguments:  
 --mode train: Sets the script to training mode.  
 --task classical_sr: Specifies the super-resolution task.  
 --scale 4: Sets the desired upscaling factor.  
@@ -113,16 +113,16 @@ After training, or to test a pre-trained/fine-tuned model, use the test mode. Th
     --folder_gt /kaggle/input/swinirdata/pro_dataset/test/HR \
     --display_n_triplets 20
 ```
-Key Testing Arguments:
---mode test: Sets the script to testing mode.
---task classical_sr: Specifies the task (should match the model).
---scale 4: Upscaling factor (should match the model).
---model_path: Path to the trained model weights to be tested.
---folder_lq: Path to the low-quality test images.
---folder_gt: Path to the ground-truth (high-quality) test images (optional, for metrics calculation and display).
---display_n_triplets 20: Number of LR-SR-GT image triplets to display (plots will be saved in the results directory). Set to 0 to disable.
---tile / --tile_overlap: For testing large images by processing them in tiles (optional).
-The default output directory for test results is results/swinir_<task_details>. Visualizations will also be saved there.
+Key Testing Arguments:  
+--mode test: Sets the script to testing mode.  
+--task classical_sr: Specifies the task (should match the model).  
+--scale 4: Upscaling factor (should match the model).  
+--model_path: Path to the trained model weights to be tested.  
+--folder_lq: Path to the low-quality test images.  
+--folder_gt: Path to the ground-truth (high-quality) test images (optional, for metrics calculation and display).  
+--display_n_triplets 20: Number of LR-SR-GT image triplets to display (plots will be saved in the results directory). Set to 0 to disable.  
+--tile / --tile_overlap: For testing large images by processing them in tiles (optional).  
+The default output directory for test results is results/swinir_<task_details>. Visualizations will also be saved there.  
 ## Acknowledgements
 This work is based on the official SwinIR implementation by Jingyun Liang et al.
 Swin Transformer: Liu, Ze, et al. "Swin transformer: Hierarchical vision transformer using shifted windows." arXiv preprint arXiv:2103.14030 (2021).
